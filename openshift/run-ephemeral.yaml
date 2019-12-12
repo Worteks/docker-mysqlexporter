@@ -1,0 +1,226 @@
+apiVersion: v1
+kind: Template
+labels:
+  app: mysqlexporter
+  template: mysqlexporter-ephemeral
+metadata:
+  annotations:
+    description: MySQL database and Prometheus Exporter - ephemeral
+      see https://github.com/Worteks/docker-mysqlexporter
+    iconClass: icon-openshift
+    openshift.io/display-name: MySQL Exporter
+    tags: mysqlexporter
+  name: mysqlexporter-ephemeral
+objects:
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      name: mysql-${FRONTNAME}
+    name: mysql-${FRONTNAME}
+  spec:
+    replicas: 1
+    selector:
+      name: mysql-${FRONTNAME}
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: mysql-${FRONTNAME}
+      spec:
+        containers:
+        - env:
+          - name: MYSQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: mysql-${FRONTNAME}
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: mysql-${FRONTNAME}
+          - name: MYSQL_ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-root-password
+                name: mysql-${FRONTNAME}
+          - name: MYSQL_DATABASE
+            valueFrom:
+              secretKeyRef:
+                key: database-name
+                name: mysql-${FRONTNAME}
+          image: ' '
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            initialDelaySeconds: 30
+            tcpSocket:
+              port: 3306
+            timeoutSeconds: 1
+          name: mysql
+          ports:
+          - containerPort: 3306
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - MYSQL_PWD="$MYSQL_PASSWORD" mysql -h 127.0.0.1 -u $MYSQL_USER -D $MYSQL_DATABASE -e 'SELECT 1'
+            initialDelaySeconds: 5
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: ${MYSQL_CPU_LIMIT}
+              memory: ${MYSQL_MEMORY_LIMIT}
+          volumeMounts:
+          - mountPath: /var/lib/mysql/data
+            name: mysql-${FRONTNAME}-data
+        - env:
+          - name: DATA_SOURCE_HOST
+            value: 127.0.0.1
+          - name: DATA_SOURCE_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: mysql-${FRONTNAME}
+          - name: DATA_SOURCE_PASS
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: mysql-${FRONTNAME}
+          image: ' '
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            initialDelaySeconds: 30
+            tcpSocket:
+              port: 9113
+            timeoutSeconds: 1
+          name: exporter
+          ports:
+          - containerPort: 9113
+            protocol: TCP
+          readinessProbe:
+            initialDelaySeconds: 30
+            tcpSocket:
+              port: 9113
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: "${EXPORTER_CPU_LIMIT}"
+              memory: "${EXPORTER_MEMORY_LIMIT}"
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        volumes:
+        - emptyDir: {}
+          name: mysql-${FRONTNAME}-data
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - mysql
+        from:
+          kind: ImageStreamTag
+          name: ${MYSQL_IMAGESTREAM_TAG}
+          namespace: ${MYSQL_IMAGE_NAMESPACE}
+        lastTriggeredImage: ""
+      type: ImageChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - exporter
+        from:
+          kind: ImageStreamTag
+          name: mysqlexporter-${MYSQL_EXPORTER_IMAGE_FRONTNAME}:${MYSQL_EXPORTER_IMAGE_TAG}
+          namespace: ${WSWEET_BUILDS}
+        lastTriggeredImage: ""
+      type: ImageChange
+    - type: ConfigChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: mysql-${FRONTNAME}
+  spec:
+    ports:
+    - name: mysql
+      port: 3306
+      protocol: TCP
+      targetPort: 3306
+    selector:
+      name: mysql-${FRONTNAME}
+    sessionAffinity: None
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      ${PROMETHEUS_SERVICE_SELECTOR}: ${PROMETHEUS_SERVICE_MATCH}
+    name: mysqlexporter-${FRONTNAME}
+  spec:
+    ports:
+    - name: exporter
+      port: 9113
+      protocol: TCP
+      targetPort: 9113
+    selector:
+      name: mysql-${FRONTNAME}
+    sessionAffinity: None
+parameters:
+- name: EXPORTER_CPU_LIMIT
+  description: Maximum amount of CPU an exporter container can use
+  displayName: Exporters CPU Limit
+  required: true
+  value: 50m
+- name: EXPORTER_MEMORY_LIMIT
+  description: Maximum amount of Memory an exporter container can use
+  displayName: Exporters Memory Limit
+  required: true
+  value: 64Mi
+- name: FRONTNAME
+  description: The name identifier assigned to objects defined in this template
+  displayName: Name
+  required: true
+  value: demo
+- name: MYSQL_CPU_LIMIT
+  description: MySQL limits for CPU resource.
+  value: 200m
+  required: true
+- name: MYSQL_EXPORTER_IMAGE_FRONTNAME
+  description: The name assigned to ImageStream object defined in corresponding template
+  displayName: Name
+  required: true
+  value: wsweet
+- name: MYSQL_EXPORTER_IMAGE_TAG
+  description: The ImageStreamTag we should pull images from
+  displayName: Tag
+  required: true
+  value: master
+- name: MYSQL_IMAGESTREAM_TAG
+  value: mysql:5.7
+- name: MYSQL_IMAGE_NAMESPACE
+  value: openshift
+- name: MYSQL_MEMORY_LIMIT
+  description: MySQL limits for memory resource.
+  value: 1Gi
+  required: true
+- name: OPENSHIFT_REGISTRY
+  description: OpenShift Registry
+  displayName: Registry Address
+  required: true
+  value: "docker-registry.default.svc:5000"
+- name: PROMETHEUS_SERVICE_SELECTOR
+  description: Prometheus Selector (key)
+  displayName: Prometheus Service Selector Key
+  required: true
+  value: prometheus
+- name: PROMETHEUS_SERVICE_MATCH
+  description: Prometheus Selector (value)
+  displayName: Prometheus Service Selector Value
+  required: true
+  value: scrape-me
+- name: WSWEET_BUILDS
+  description: CI Namespace
+  displayName: Builds
+  required: true
+  value: wsweet-ci
